@@ -5,6 +5,9 @@ on:
     branches: ["main"]
   workflow_dispatch:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build:
     runs-on: windows-latest
@@ -13,7 +16,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Show files
+      - name: Show repository files
         run: dir
 
       - name: Set up Python
@@ -21,14 +24,22 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
+
       - name: Install dependencies
-        run: python -m pip install -r Mark/requirements.txt
+        run: python -m pip install -r requirements.txt
 
       - name: Build EXE
-        run: cd Mark && pyinstaller Mark.spec
+        run: pyinstaller --onefile --windowed --name Mark main.py
+
+      - name: Show dist files
+        run: dir dist /s
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: Mark-Windows
-          path: Mark/dist/Mark.exe
+          path: dist/**
+          if-no-files-found: error
+          overwrite: true
