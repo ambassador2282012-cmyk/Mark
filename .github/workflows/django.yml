@@ -19,6 +19,9 @@ jobs:
       - name: Show repository files
         run: dir
 
+      - name: Show Mark folder
+        run: dir Mark
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -28,18 +31,18 @@ jobs:
         run: python -m pip install --upgrade pip
 
       - name: Install dependencies
-        run: python -m pip install -r requirements.txt
+        run: python -m pip install -r Mark/requirements.txt
 
       - name: Build EXE
-        run: pyinstaller --onefile --windowed --name Mark main.py
+        run: cd Mark && pyinstaller --onefile --windowed --name Mark main.py
 
       - name: Show dist files
-        run: dir dist /s
+        run: dir Mark\dist /s
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: Mark-Windows
-          path: dist/**
+          path: Mark/dist/**
           if-no-files-found: error
           overwrite: true
