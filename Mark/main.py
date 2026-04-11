@@ -1,8 +1,15 @@
+import os
+import json
 import customtkinter as ctk
 from tkinter import ttk, messagebox, StringVar, IntVar, filedialog, simpledialog
 from collections import defaultdict
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+try:
+    from docx import Document
+except ImportError:
+    Document = None
 
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
@@ -13,6 +20,7 @@ MONTHS = [
 ]
 
 EXPENSE_TYPES = ["Ремонт", "Электроэнергия", "Непредвиденные"]
+STATE_FILE = "rent_app_state.json"
 
 
 def money(value):
@@ -53,6 +61,8 @@ class RentApp(ctk.CTk):
         self.configure(fg_color=self.bg_main)
         self.setup_tree_style()
         self.build_ui()
+        self.load_state()
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
 
     def setup_tree_style(self):
         style = ttk.Style()
@@ -115,12 +125,26 @@ class RentApp(ctk.CTk):
         )
         self.new_file_button.grid(row=0, column=1, padx=8, pady=18, sticky="e")
 
+        self.import_excel_button = ctk.CTkButton(
+            self.top_frame, text="📥 Импорт Excel", command=self.import_excel,
+            fg_color=self.bg_entry, hover_color="#2d3646", text_color=self.text,
+            corner_radius=12, height=38
+        )
+        self.import_excel_button.grid(row=0, column=2, padx=8, pady=18, sticky="e")
+
+        self.import_word_button = ctk.CTkButton(
+            self.top_frame, text="📄 Импорт Word", command=self.import_word,
+            fg_color=self.bg_entry, hover_color="#2d3646", text_color=self.text,
+            corner_radius=12, height=38
+        )
+        self.import_word_button.grid(row=0, column=3, padx=8, pady=18, sticky="e")
+
         self.save_excel_button = ctk.CTkButton(
             self.top_frame, text="💾 Сохранить в Excel", command=self.save_to_excel,
             fg_color=self.bg_entry, hover_color="#2d3646", text_color=self.text,
             corner_radius=12, height=38
         )
-        self.save_excel_button.grid(row=0, column=2, padx=(8, 18), pady=18, sticky="e")
+        self.save_excel_button.grid(row=0, column=4, padx=(8, 18), pady=18, sticky="e")
 
         self.main_frame = ctk.CTkFrame(self, fg_color=self.bg_main)
         self.main_frame.grid(row=1, column=0, padx=16, pady=(0, 16), sticky="nsew")
@@ -182,7 +206,7 @@ class RentApp(ctk.CTk):
         ctk.CTkLabel(self.input_frame, text="💰 Сумма аренды:", text_color=self.text).grid(row=4, column=0, padx=16, pady=8, sticky="w")
         self.rent_entry = ctk.CTkEntry(
             self.input_frame,
-            placeholder_text="например 30000",
+            placeholder_text="например 30000.50",
             fg_color=self.bg_entry,
             border_color=self.line,
             text_color=self.text
@@ -211,25 +235,13 @@ class RentApp(ctk.CTk):
         self.actions_frame.grid(row=1, column=0, padx=0, pady=(0, 12), sticky="ew")
         self.actions_frame.grid_columnconfigure((0, 1, 2), weight=1)
 
-        self.show_button = ctk.CTkButton(
-            self.actions_frame, text="🔎 Показать", command=self.show_record_details,
-            fg_color=self.bg_entry, hover_color="#2d3646", text_color=self.text,
-            corner_radius=12, height=38
-        )
+        self.show_button = ctk.CTkButton(self.actions_frame, text="🔎 Показать", command=self.show_record_details, fg_color=self.bg_entry, hover_color="#2d3646", text_color=self.text, corner_radius=12, height=38)
         self.show_button.grid(row=0, column=0, padx=12, pady=12, sticky="ew")
 
-        self.edit_button = ctk.CTkButton(
-            self.actions_frame, text="✏ Редактировать", command=self.edit_selected_record,
-            fg_color=self.bg_entry, hover_color="#2d3646", text_color=self.text,
-            corner_radius=12, height=38
-        )
+        self.edit_button = ctk.CTkButton(self.actions_frame, text="✏ Редактировать", command=self.edit_selected_record, fg_color=self.bg_entry, hover_color="#2d3646", text_color=self.text, corner_radius=12, height=38)
         self.edit_button.grid(row=0, column=1, padx=12, pady=12, sticky="ew")
 
-        self.delete_button = ctk.CTkButton(
-            self.actions_frame, text="🗑 Удалить", command=self.delete_selected_record,
-            fg_color=self.bg_entry, hover_color="#3b2e34", text_color=self.text,
-            corner_radius=12, height=38
-        )
+        self.delete_button = ctk.CTkButton(self.actions_frame, text="🗑 Удалить", command=self.delete_selected_record, fg_color=self.bg_entry, hover_color="#3b2e34", text_color=self.text, corner_radius=12, height=38)
         self.delete_button.grid(row=0, column=2, padx=12, pady=12, sticky="ew")
 
     def build_table_section(self):
@@ -250,14 +262,7 @@ class RentApp(ctk.CTk):
             "net": "Чистый доход",
         }
 
-        widths = {
-            "month": 120,
-            "tenant": 220,
-            "rooms": 390,
-            "rent": 130,
-            "expenses": 130,
-            "net": 130,
-        }
+        widths = {"month": 120, "tenant": 220, "rooms": 390, "rent": 130, "expenses": 130, "net": 130}
 
         for col in columns:
             self.table.heading(col, text=headings[col])
@@ -279,61 +284,26 @@ class RentApp(ctk.CTk):
         self.summary_frame.grid(row=3, column=0, padx=0, pady=(0, 0), sticky="ew")
         self.summary_frame.grid_columnconfigure(0, weight=1)
 
-        self.summary_title = ctk.CTkLabel(
-            self.summary_frame,
-            text="📊 Итоги",
-            font=ctk.CTkFont(size=16, weight="bold"),
-            text_color=self.text
-        )
+        self.summary_title = ctk.CTkLabel(self.summary_frame, text="📊 Итоги", font=ctk.CTkFont(size=16, weight="bold"), text_color=self.text)
         self.summary_title.grid(row=0, column=0, padx=16, pady=(12, 6), sticky="w")
 
-        self.summary_label = ctk.CTkLabel(
-            self.summary_frame,
-            text="Данные пока не рассчитаны",
-            justify="left",
-            text_color=self.muted
-        )
+        self.summary_label = ctk.CTkLabel(self.summary_frame, text="Данные пока не рассчитаны", justify="left", text_color=self.muted)
         self.summary_label.grid(row=1, column=0, padx=16, pady=(0, 14), sticky="w")
 
-    def on_table_select(self, event=None):
-        sel = self.table.selection()
-        if not sel:
-            self.selected_record_index = None
-            return
-        try:
-            self.selected_record_index = int(self.table.item(sel[0], "tags")[0])
-        except Exception:
-            self.selected_record_index = None
-
-    def selected_record(self):
-        if self.selected_record_index is None:
-            return None
-        if self.selected_record_index < 0 or self.selected_record_index >= len(self.records):
-            return None
-        return self.records[self.selected_record_index]
-
-    def update_tenant_menu(self):
-        self.tenant_menu.configure(values=self.tenants if self.tenants else ["-"])
-        self.tenant_menu.set(self.tenants[0] if self.tenants else "-")
-        self.tenants_value_label.configure(
-            text="Арендаторы: " + ", ".join(self.tenants) if self.tenants else "Арендаторы: не заданы"
-        )
-
-    def add_tenant_to_list(self):
-        name = simpledialog.askstring("Новый арендатор", "Введите имя арендатора:")
-        if not name or not name.strip():
-            return
-        name = name.strip()
-        if name not in self.tenants:
-            self.tenants.append(name)
-            self.update_tenant_menu()
-        self.tenant_menu.set(name)
+    def rebuild_room_checkboxes(self):
+        for widget in self.rooms_check_frame.winfo_children():
+            widget.destroy()
+        self.room_vars = []
+        for i, room in enumerate(self.rooms):
+            var = IntVar(value=0)
+            cb = ctk.CTkCheckBox(self.rooms_check_frame, text=room, variable=var)
+            cb.grid(row=i // 4, column=i % 4, padx=12, pady=8, sticky="w")
+            self.room_vars.append(var)
 
     def create_new_file(self):
         count_text = simpledialog.askstring("Новый файл", "Сколько помещений в объекте?")
         if not count_text:
             return
-
         try:
             count = int(count_text)
             if count <= 0:
@@ -351,25 +321,30 @@ class RentApp(ctk.CTk):
             rooms.append(room_name.strip())
 
         tenants_text = simpledialog.askstring("Арендаторы", "Введите имена арендаторов через запятую:")
-        tenants = []
-        if tenants_text:
-            tenants = [t.strip() for t in tenants_text.split(",") if t.strip()]
+        tenants = [t.strip() for t in tenants_text.split(",") if t.strip()] if tenants_text else []
 
         self.rooms = rooms
         self.tenants = tenants
         self.rooms_value_label.configure(text="Помещения: " + ", ".join(self.rooms))
         self.update_tenant_menu()
         self.form_title.configure(text="Файл создан. Можно добавлять арендаторов и расходы.")
+        self.rebuild_room_checkboxes()
+        self.refresh_table()
 
-        for widget in self.rooms_check_frame.winfo_children():
-            widget.destroy()
+    def update_tenant_menu(self):
+        self.tenant_menu.configure(values=self.tenants if self.tenants else ["-"])
+        self.tenant_menu.set(self.tenants[0] if self.tenants else "-")
+        self.tenants_value_label.configure(text="Арендаторы: " + ", ".join(self.tenants) if self.tenants else "Арендаторы: не заданы")
 
-        self.room_vars = []
-        for i, room in enumerate(self.rooms):
-            var = IntVar(value=0)
-            cb = ctk.CTkCheckBox(self.rooms_check_frame, text=room, variable=var)
-            cb.grid(row=i // 4, column=i % 4, padx=12, pady=8, sticky="w")
-            self.room_vars.append(var)
+    def add_tenant_to_list(self):
+        name = simpledialog.askstring("Новый арендатор", "Введите имя арендатора:")
+        if not name or not name.strip():
+            return
+        name = name.strip()
+        if name not in self.tenants:
+            self.tenants.append(name)
+            self.update_tenant_menu()
+        self.tenant_menu.set(name)
 
     def add_tenant(self):
         if not self.rooms:
@@ -385,9 +360,9 @@ class RentApp(ctk.CTk):
             return
 
         try:
-            rent = float(rent_text)
+            rent = float(rent_text.replace(",", "."))
         except ValueError:
-            messagebox.showerror("Ошибка", "Введите корректную сумму аренды.")
+            messagebox.showerror("Ошибка", "Введите корректную сумму аренды, например 30000.50.")
             return
 
         record = {
@@ -427,34 +402,44 @@ class RentApp(ctk.CTk):
             total_rent += record["rent"]
             total_expenses += expenses
 
-            self.table.insert(
-                "",
-                "end",
-                values=(
-                    record["month"],
-                    record["tenant"],
-                    ", ".join(record["rooms"]),
-                    money(record["rent"]),
-                    money(expenses),
-                    money(net),
-                ),
-                tags=(str(idx),),
-            )
+            self.table.insert("", "end", values=(
+                record["month"], record["tenant"], ", ".join(record["rooms"]),
+                money(record["rent"]), money(expenses), money(net)
+            ), tags=(str(idx),))
 
         total_rooms = len(self.rooms)
         avg_without = total_rent / total_rooms if total_rooms else 0
         avg_with = (total_rent - total_expenses) / total_rooms if total_rooms else 0
 
-        self.summary_label.configure(
-            text=(
-                f"Общий доход без расходов: {money(total_rent)}\n"
-                f"Общий доход с расходами: {money(total_rent - total_expenses)}\n"
-                f"Средний доход без расходов на помещение: {money(avg_without)}\n"
-                f"Средний доход с расходами на помещение: {money(avg_with)}\n"
-                f"Общее количество помещений: {total_rooms}"
-            ),
-            justify="left"
-        )
+        self.summary_label.configure(text=(
+            f"Общий доход без расходов: {money(total_rent)}\n"
+            f"Общий доход с расходами: {money(total_rent - total_expenses)}\n"
+            f"Средний доход без расходов на помещение: {money(avg_without)}\n"
+            f"Средний доход с расходами на помещение: {money(avg_with)}\n"
+            f"Общее количество помещений: {total_rooms}"
+        ), justify="left")
+
+    def on_table_select(self, event=None):
+        sel = self.table.selection()
+        if not sel:
+            self.selected_record_index = None
+            return
+        try:
+            self.selected_record_index = int(self.table.item(sel[0], "tags")[0])
+        except Exception:
+            self.selected_record_index = None
+
+    def selected_record(self):
+        if self.selected_record_index is None or self.selected_record_index >= len(self.records):
+            return None
+        return self.records[self.selected_record_index]
+
+    def show_record_details(self):
+        record = self.selected_record()
+        if record is None:
+            messagebox.showwarning("Внимание", "Выберите запись в таблице.")
+            return
+        self.open_detail_window(record)
 
     def open_detail_window(self, record):
         if self.detail_window is not None and self.detail_window.winfo_exists():
@@ -488,14 +473,7 @@ class RentApp(ctk.CTk):
             r = record["expenses"][room]["Ремонт"]
             e = record["expenses"][room]["Электроэнергия"]
             u = record["expenses"][room]["Непредвиденные"]
-            ctk.CTkLabel(
-                frame,
-                text=f"{room} | Ремонт: {money(r)} | Электроэнергия: {money(e)} | Непредвиденные: {money(u)}",
-                anchor="w",
-                justify="left",
-                wraplength=700,
-                text_color=self.text
-            ).pack(fill="x", pady=2)
+            ctk.CTkLabel(frame, text=f"{room} | Ремонт: {money(r)} | Электроэнергия: {money(e)} | Непредвиденные: {money(u)}", anchor="w", justify="left", wraplength=700, text_color=self.text).pack(fill="x", pady=2)
 
         ctk.CTkLabel(frame, text=f"Ремонт всего: {money(repair_total)}", anchor="w", text_color=self.text).pack(fill="x", pady=(14, 2))
         ctk.CTkLabel(frame, text=f"Электроэнергия всего: {money(electricity_total)}", anchor="w", text_color=self.text).pack(fill="x", pady=2)
@@ -503,22 +481,7 @@ class RentApp(ctk.CTk):
         ctk.CTkLabel(frame, text=f"Всего расходов: {money(expenses)}", anchor="w", text_color=self.text).pack(fill="x", pady=2)
         ctk.CTkLabel(frame, text=f"Чистый доход: {money(net)}", anchor="w", font=ctk.CTkFont(weight="bold"), text_color=self.success).pack(fill="x", pady=(8, 2))
 
-        ctk.CTkButton(
-            frame,
-            text="✖ Закрыть",
-            command=self.detail_window.destroy,
-            fg_color=self.bg_entry,
-            hover_color="#2d3646",
-            text_color=self.text,
-            corner_radius=12
-        ).pack(pady=18)
-
-    def show_record_details(self):
-        record = self.selected_record()
-        if record is None:
-            messagebox.showwarning("Внимание", "Выберите запись в таблице.")
-            return
-        self.open_detail_window(record)
+        ctk.CTkButton(frame, text="✖ Закрыть", command=self.detail_window.destroy, fg_color=self.bg_entry, hover_color="#2d3646", text_color=self.text, corner_radius=12).pack(pady=18)
 
     def edit_selected_record(self):
         record = self.selected_record()
@@ -542,19 +505,13 @@ class RentApp(ctk.CTk):
 
         month_var = StringVar(value=record["month"])
         tenant_var = StringVar(value=record["tenant"])
-        rent_var = StringVar(value=str(record["rent"]))
+        rent_var = StringVar(value=money(record["rent"]))
 
         ctk.CTkLabel(frame, text="📅 Месяц:", text_color=self.text).pack(anchor="w", pady=(8, 0))
-        ctk.CTkOptionMenu(
-            frame, values=MONTHS, variable=month_var,
-            fg_color=self.bg_entry, button_color=self.accent, button_hover_color=self.accent_hover
-        ).pack(fill="x", pady=(0, 10))
+        ctk.CTkOptionMenu(frame, values=MONTHS, variable=month_var, fg_color=self.bg_entry, button_color=self.accent, button_hover_color=self.accent_hover).pack(fill="x", pady=(0, 10))
 
         ctk.CTkLabel(frame, text="👤 Арендатор:", text_color=self.text).pack(anchor="w", pady=(6, 0))
-        ctk.CTkOptionMenu(
-            frame, values=self.tenants if self.tenants else ["-"], variable=tenant_var,
-            fg_color=self.bg_entry, button_color=self.accent, button_hover_color=self.accent_hover
-        ).pack(fill="x", pady=(0, 10))
+        ctk.CTkOptionMenu(frame, values=self.tenants if self.tenants else ["-"], variable=tenant_var, fg_color=self.bg_entry, button_color=self.accent, button_hover_color=self.accent_hover).pack(fill="x", pady=(0, 10))
 
         ctk.CTkLabel(frame, text="💰 Сумма аренды:", text_color=self.text).pack(anchor="w", pady=(6, 0))
         ctk.CTkEntry(frame, textvariable=rent_var, fg_color=self.bg_entry, border_color=self.line, text_color=self.text).pack(fill="x", pady=(0, 10))
@@ -590,13 +547,7 @@ class RentApp(ctk.CTk):
                 ctk.CTkLabel(labels_frame, text=exp_type, text_color=self.muted, anchor="center").grid(row=0, column=col, padx=6, sticky="ew")
                 value = record["expenses"][room][exp_type] if room in record["rooms"] else 0.0
                 var = StringVar(value=str(value))
-                ctk.CTkEntry(
-                    values_frame,
-                    textvariable=var,
-                    fg_color=self.bg_entry,
-                    border_color=self.line,
-                    text_color=self.text
-                ).grid(row=0, column=col, padx=6, sticky="ew")
+                ctk.CTkEntry(values_frame, textvariable=var, fg_color=self.bg_entry, border_color=self.line, text_color=self.text).grid(row=0, column=col, padx=6, sticky="ew")
                 vars_for_room[exp_type] = var
 
             expense_vars[room] = vars_for_room
@@ -612,9 +563,9 @@ class RentApp(ctk.CTk):
                 return
 
             try:
-                new_rent = float(new_rent_text)
+                new_rent = float(new_rent_text.replace(",", "."))
             except ValueError:
-                messagebox.showerror("Ошибка", "Введите корректную сумму аренды.")
+                messagebox.showerror("Ошибка", "Введите корректную сумму аренды с копейками.")
                 return
 
             new_expenses = defaultdict(lambda: {t: 0.0 for t in EXPENSE_TYPES})
@@ -623,7 +574,7 @@ class RentApp(ctk.CTk):
                     continue
                 for exp_type in EXPENSE_TYPES:
                     try:
-                        new_expenses[room][exp_type] = float(expense_vars[room][exp_type].get().strip() or "0")
+                        new_expenses[room][exp_type] = float(expense_vars[room][exp_type].get().strip().replace(",", ".") or "0")
                     except ValueError:
                         messagebox.showerror("Ошибка", f"Некорректное значение: {room} — {exp_type}")
                         return
@@ -638,39 +589,193 @@ class RentApp(ctk.CTk):
             self.refresh_table()
             self.edit_window.destroy()
 
-        ctk.CTkButton(
-            frame,
-            text="💾 Сохранить изменения",
-            command=save_changes,
-            fg_color=self.bg_entry,
-            hover_color="#2d3646",
-            text_color=self.text,
-            corner_radius=12
-        ).pack(pady=18)
+        ctk.CTkButton(frame, text="💾 Сохранить изменения", command=save_changes, fg_color=self.bg_entry, hover_color="#2d3646", text_color=self.text, corner_radius=12).pack(pady=18)
 
     def delete_selected_record(self):
         idx = self.selected_record_index
         if idx is None or idx < 0 or idx >= len(self.records):
             messagebox.showwarning("Внимание", "Выберите запись в таблице.")
             return
-
         if not messagebox.askyesno("Подтверждение", "Удалить выбранную запись?"):
             return
-
         del self.records[idx]
         self.selected_record_index = None
         self.refresh_table()
+
+    def import_excel(self):
+        path = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx")], title="Выберите Excel файл")
+        if not path:
+            return
+        try:
+            wb = load_workbook(path)
+            ws = wb.active
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось прочитать Excel: {e}")
+            return
+
+        self.records.clear()
+        self.rooms = []
+        self.tenants = []
+
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            if not row or not any(row):
+                continue
+            if len(row) < 4:
+                continue
+            month = str(row[0]).strip()
+            tenant = str(row[1]).strip()
+            rooms = [x.strip() for x in str(row[2]).split(",") if x.strip()]
+            try:
+                rent = float(str(row[3]).replace(",", "."))
+            except Exception:
+                continue
+            self.records.append({
+                "month": month,
+                "tenant": tenant,
+                "rooms": rooms,
+                "rent": rent,
+                "share": rent / len(rooms) if rooms else rent,
+                "expenses": defaultdict(lambda: {t: 0.0 for t in EXPENSE_TYPES}),
+            })
+            if tenant not in self.tenants:
+                self.tenants.append(tenant)
+            for room in rooms:
+                if room not in self.rooms:
+                    self.rooms.append(room)
+
+        self.rooms_value_label.configure(text="Помещения: " + ", ".join(self.rooms) if self.rooms else "Помещения: не заданы")
+        self.update_tenant_menu()
+        self.rebuild_room_checkboxes()
+        self.refresh_table()
+
+    def import_word(self):
+        if Document is None:
+            messagebox.showerror("Ошибка", "Не установлен пакет python-docx.")
+            return
+
+        path = filedialog.askopenfilename(filetypes=[("Word files", "*.docx")], title="Выберите Word файл")
+        if not path:
+            return
+
+        try:
+            doc = Document(path)
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось прочитать Word: {e}")
+            return
+
+        self.records.clear()
+        self.rooms = []
+        self.tenants = []
+
+        for table in doc.tables:
+            if not table.rows:
+                continue
+            for row in table.rows[1:]:
+                data = [cell.text.strip() for cell in row.cells]
+                if len(data) < 4:
+                    continue
+                month, tenant, rooms_text, rent_text = data[0], data[1], data[2], data[3]
+                rooms = [x.strip() for x in rooms_text.split(",") if x.strip()]
+                try:
+                    rent = float(rent_text.replace(",", "."))
+                except Exception:
+                    continue
+
+                self.records.append({
+                    "month": month,
+                    "tenant": tenant,
+                    "rooms": rooms,
+                    "rent": rent,
+                    "share": rent / len(rooms) if rooms else rent,
+                    "expenses": defaultdict(lambda: {t: 0.0 for t in EXPENSE_TYPES}),
+                })
+
+                if tenant not in self.tenants:
+                    self.tenants.append(tenant)
+                for room in rooms:
+                    if room not in self.rooms:
+                        self.rooms.append(room)
+
+            if self.records:
+                break
+
+        self.rooms_value_label.configure(text="Помещения: " + ", ".join(self.rooms) if self.rooms else "Помещения: не заданы")
+        self.update_tenant_menu()
+        self.rebuild_room_checkboxes()
+        self.refresh_table()
+
+    def save_state(self):
+        data = {
+            "rooms": self.rooms,
+            "tenants": self.tenants,
+            "current_month": self.current_month.get(),
+            "records": []
+        }
+        for rec in self.records:
+            expenses = {room: dict(rec["expenses"][room]) for room in rec["rooms"]}
+            data["records"].append({
+                "month": rec["month"],
+                "tenant": rec["tenant"],
+                "rooms": rec["rooms"],
+                "rent": rec["rent"],
+                "share": rec["share"],
+                "expenses": expenses
+            })
+
+        with open(STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+    def load_state(self):
+        if not os.path.exists(STATE_FILE):
+            self.refresh_table()
+            return
+        try:
+            with open(STATE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            self.refresh_table()
+            return
+
+        self.rooms = data.get("rooms", [])
+        self.tenants = data.get("tenants", [])
+        self.current_month.set(data.get("current_month", MONTHS[0]))
+        self.records = []
+
+        for rec in data.get("records", []):
+            expenses = defaultdict(lambda: {t: 0.0 for t in EXPENSE_TYPES})
+            for room, vals in rec.get("expenses", {}).items():
+                expenses[room] = {
+                    "Ремонт": float(vals.get("Ремонт", 0)),
+                    "Электроэнергия": float(vals.get("Электроэнергия", 0)),
+                    "Непредвиденные": float(vals.get("Непредвиденные", 0)),
+                }
+            self.records.append({
+                "month": rec.get("month", MONTHS[0]),
+                "tenant": rec.get("tenant", ""),
+                "rooms": rec.get("rooms", []),
+                "rent": float(rec.get("rent", 0)),
+                "share": float(rec.get("share", 0)),
+                "expenses": expenses
+            })
+
+        self.rooms_value_label.configure(text="Помещения: " + ", ".join(self.rooms) if self.rooms else "Помещения: не заданы")
+        self.update_tenant_menu()
+        self.rebuild_room_checkboxes()
+        self.refresh_table()
+
+    def on_close(self):
+        try:
+            self.save_state()
+        except Exception:
+            pass
+        self.destroy()
 
     def save_to_excel(self):
         if not self.records:
             messagebox.showwarning("Внимание", "Нет данных для сохранения.")
             return
 
-        file_path = filedialog.asksaveasfilename(
-            defaultextension=".xlsx",
-            filetypes=[("Excel files", "*.xlsx")],
-            title="Сохранить как"
-        )
+        file_path = filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=[("Excel files", "*.xlsx")], title="Сохранить как")
         if not file_path:
             return
 
@@ -687,58 +792,37 @@ class RentApp(ctk.CTk):
         border = Border(left=thin, right=thin, top=thin, bottom=thin)
 
         headers = ["Месяц", "Арендатор", "Помещения", "Аренда", "Всего расходов", "Чистый доход"]
-        row = 1
 
-        months_order = []
-        for rec in self.records:
-            if rec["month"] not in months_order:
-                months_order.append(rec["month"])
+        for col, head in enumerate(headers, start=1):
+            cell = ws.cell(row=1, column=col, value=head)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = center
+            cell.border = border
 
+        row = 2
         total_rent = 0.0
         total_expenses = 0.0
 
-        for month in months_order:
-            ws.cell(row=row, column=1, value=month)
-            ws.cell(row=row, column=1).font = Font(bold=True, size=14)
-            row += 1
+        for rec in self.records:
+            _, _, _, expenses, net = self.calc_record(rec)
+            total_rent += rec["rent"]
+            total_expenses += expenses
 
-            for col, head in enumerate(headers, start=1):
-                cell = ws.cell(row=row, column=col, value=head)
-                cell.fill = header_fill
-                cell.font = header_font
-                cell.alignment = center
+            values = [rec["month"], rec["tenant"], ", ".join(rec["rooms"]), rec["rent"], expenses, net]
+            for col, value in enumerate(values, start=1):
+                cell = ws.cell(row=row, column=col, value=value)
                 cell.border = border
-            row += 1
-
-            for rec in self.records:
-                if rec["month"] != month:
-                    continue
-
-                _, _, _, expenses, net = self.calc_record(rec)
-                total_rent += rec["rent"]
-                total_expenses += expenses
-
-                values = [
-                    rec["month"],
-                    rec["tenant"],
-                    ", ".join(rec["rooms"]),
-                    rec["rent"],
-                    expenses,
-                    net,
-                ]
-
-                for col, value in enumerate(values, start=1):
-                    cell = ws.cell(row=row, column=col, value=value)
-                    cell.border = border
-                    cell.alignment = left if col in (2, 3) else center
-                row += 1
-
+                cell.alignment = left if col in (2, 3) else center
+                if col in (4, 5, 6):
+                    cell.number_format = '#,##0.00'
             row += 1
 
         total_rooms = len(self.rooms)
         avg_without = total_rent / total_rooms if total_rooms else 0
         avg_with = (total_rent - total_expenses) / total_rooms if total_rooms else 0
 
+        row += 1
         ws.cell(row=row, column=1, value="Итоги").font = Font(bold=True, size=14)
         row += 1
 
@@ -750,7 +834,7 @@ class RentApp(ctk.CTk):
             ("Общее количество помещений", total_rooms),
         ]:
             ws.cell(row=row, column=1, value=name).font = bold_font
-            ws.cell(row=row, column=2, value=value)
+            ws.cell(row=row, column=2, value=value).number_format = '#,##0.00'
             row += 1
 
         widths = {1: 18, 2: 28, 3: 35, 4: 15, 5: 18, 6: 18}
